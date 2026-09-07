@@ -25,13 +25,37 @@ gate — the app is open to anyone with the URL.
 - **Bulk paste**: paste any text into the batch form — numbered lists,
   bot messages, extra formatting — and every `http://` / `https://` link
   in it is picked out automatically.
-- **Test / Test all links**: visits a link from the server and checks the
-  page for common "already used" phrases (plus any you set for its type).
-  This is a best-effort heuristic, not a guarantee — some activation
-  pages (including some of Google's) render their status with
-  JavaScript, which a server-side check can't see. A clean result means
-  "no used-link text found," not "confirmed working." Keep verifying
-  anything you're about to act on for a refund claim.
+- **Test / Test all links / per-supplier test**: visits a link and checks
+  the page for common "already used" phrases (plus any you set for its
+  type). By default this reads only the page's initial HTML — some pages
+  (including some of Google's) build their "already used" message with
+  JavaScript, which a plain fetch can't see. Setting up the optional
+  Cloudflare Browser Rendering integration below fixes this by actually
+  running the page's JavaScript before checking the text.
+
+## Optional: real JavaScript rendering for the link checker
+
+Without this, "Test" reads a page's raw HTML only, which misses messages
+that appear after a page finishes loading. Cloudflare's Browser Rendering
+API (a real browser running on Cloudflare's infrastructure) fixes this,
+and has a free tier.
+
+1. Sign up at https://dash.cloudflare.com (free account).
+2. In the dashboard sidebar, find **Browser Rendering** (may be under
+   **AI** or **Workers & Pages** depending on the current layout) and
+   enable it — this works on Cloudflare's Free plan.
+3. Get your **Account ID**: visible on the right side of most dashboard
+   pages, or under **Workers & Pages → Overview**.
+4. Create an API Token: **My Profile → API Tokens → Create Token** →
+   choose a template or custom token with **Browser Rendering: Edit**
+   permission.
+5. In Vercel: **Settings → Environment Variables**, add
+   `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` with those values.
+6. Redeploy.
+
+The checker automatically uses this when both variables are present, and
+falls back to the plain-HTML method if they're missing or a request to
+Cloudflare fails — so nothing breaks either way.
 
 ## 1. Push it to GitHub
 

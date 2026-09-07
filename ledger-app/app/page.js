@@ -491,8 +491,11 @@ export default function Page() {
                             )}
                             {check && check.state === 'done' && !check.looksUsed && (
                               <div className="check-result ok">
-                                Not flagged as used (status {check.status}) — inconclusive if this
-                                page shows its result via JavaScript
+                                Not flagged as used
+                                {check.status ? ` (status ${check.status})` : ''}
+                                {check.renderer === 'plain'
+                                  ? ' — inconclusive if this page shows its result via JavaScript'
+                                  : ' (checked with JavaScript rendering)'}
                               </div>
                             )}
                           </td>
