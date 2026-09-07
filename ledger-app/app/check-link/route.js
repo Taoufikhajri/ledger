@@ -1,0 +1,76 @@
+export const runtime = 'nodejs';
+export const maxDuration = 15;
+
+// Phrases checked on every link regardless of type, based on common wording
+// across activation/redemption services. Type-specific phrases (set when you
+// add a type) are added on top of these.
+const GENERIC_USED_PHRASES = [
+  'already in use',
+  'already been used',
+  'already redeemed',
+  'already claimed',
+  'no longer valid',
+  'link has expired',
+  'this offer has expired',
+  'code has already been used',
+  'invalid code',
+  'this link is not valid',
+  'this link has expired',
+];
+
+export async function POST(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ ok: false, error: 'Invalid request' }, { status: 400 });
+  }
+
+  const { url, extraPhrases } = body || {};
+  if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+    return Response.json({ ok: false, error: 'Missing or invalid URL' }, { status: 400 });
+  }
+
+  const phrases = [...GENERIC_USED_PHRASES, ...(Array.isArray(extraPhrases) ? extraPhrases : [])]
+    .map((p) => String(p).toLowerCase().trim())
+    .filter(Boolean);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+    });
+    clearTimeout(timeout);
+
+    let text = '';
+    try {
+      const raw = await res.text();
+      text = raw.slice(0, 300000).toLowerCase();
+    } catch {
+      // body couldn't be read — still report the status code below
+    }
+
+    const matched = phrases.find((p) => text.includes(p));
+
+    return Response.json({
+      ok: true,
+      status: res.status,
+      looksUsed: Boolean(matched),
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    const timedOut = err.name === 'AbortError';
+    return Response.json({
+      ok: false,
+      error: timedOut ? 'Timed out reaching the link' : 'Could not reach the link',
+    });
+  }
+}
