@@ -30,6 +30,7 @@ export default function Page() {
   const [modal, setModal] = useState(null); // 'supplier' | 'type' | 'batch' | null
   const [toast, setToast] = useState('');
   const [checks, setChecks] = useState({}); // linkId -> { state, looksUsed, status, error }
+  const [testingSupplier, setTestingSupplier] = useState(null);
   const toastTimer = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(true);
@@ -267,6 +268,23 @@ export default function Page() {
     }
   }
 
+  async function testSupplier(supplierId) {
+    const supplierBatches = supplierId === 'all' ? batches : batches.filter((b) => b.supplierId === supplierId);
+    for (const batch of supplierBatches) {
+      // eslint-disable-next-line no-await-in-loop
+      await testBatch(batch);
+    }
+  }
+
+  async function runSupplierTest(supplierId) {
+    setTestingSupplier(supplierId);
+    try {
+      await testSupplier(supplierId);
+    } finally {
+      setTestingSupplier(null);
+    }
+  }
+
   if (!loaded) {
     return <div className="center-loading">Loading ledger…</div>;
   }
@@ -305,7 +323,19 @@ export default function Page() {
             onClick={() => setSupplierFilter('all')}
           >
             <span>All suppliers</span>
-            <span className="count mono">{batches.reduce((n, b) => n + b.links.length, 0)}</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="count mono">{batches.reduce((n, b) => n + b.links.length, 0)}</span>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={testingSupplier !== null}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  runSupplierTest('all');
+                }}
+              >
+                {testingSupplier === 'all' ? 'Testing…' : 'Test all'}
+              </button>
+            </span>
           </div>
           {suppliers.map((s) => (
             <div
@@ -314,7 +344,19 @@ export default function Page() {
               onClick={() => setSupplierFilter(s.id)}
             >
               <span>{s.name}</span>
-              <span className="count mono">{supplierCounts[s.id] || 0}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className="count mono">{supplierCounts[s.id] || 0}</span>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={testingSupplier !== null}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    runSupplierTest(s.id);
+                  }}
+                >
+                  {testingSupplier === s.id ? 'Testing…' : 'Test'}
+                </button>
+              </span>
             </div>
           ))}
         </div>
@@ -449,7 +491,8 @@ export default function Page() {
                             )}
                             {check && check.state === 'done' && !check.looksUsed && (
                               <div className="check-result ok">
-                                No used-link text found (status {check.status})
+                                Not flagged as used (status {check.status}) — inconclusive if this
+                                page shows its result via JavaScript
                               </div>
                             )}
                           </td>
