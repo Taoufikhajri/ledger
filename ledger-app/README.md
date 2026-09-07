@@ -4,20 +4,39 @@ A Next.js app for tracking activation links by supplier and batch, so
 expired links can be traced back to whoever sold them to you for a refund
 claim.
 
-Data is stored in a real database (Redis via Vercel's Marketplace), so
-it's the same ledger whether you open it from your laptop or your phone.
-No password gate — the app is open to anyone with the URL.
+Data is stored in a real database (Redis via Upstash), so it's the same
+ledger whether you open it from your laptop or your phone. No password
+gate — the app is open to anyone with the URL.
 
 ## What's inside
 
-- `app/page.js` — the whole UI (suppliers, batches, links, filters, CSV export)
-- `app/api/data/route.js` — a tiny API that reads/writes your data in Redis
+- `app/page.js` — the whole UI (suppliers, types, batches, links, filters, CSV export, link testing)
+- `app/api/data/route.js` — reads/writes your ledger data in Redis
+- `app/api/check-link/route.js` — visits a link server-side and checks for "already used" text
 - `app/globals.css` — styling
+
+## Features
+
+- **Suppliers**: who sold you each batch of links.
+- **Types** (optional, per batch): group links by product (Gemini Pro,
+  Netflix, etc.). Each type can store comma-separated phrases that appear
+  on that service's page when a link is already used — used by the Test
+  button.
+- **Bulk paste**: paste any text into the batch form — numbered lists,
+  bot messages, extra formatting — and every `http://` / `https://` link
+  in it is picked out automatically.
+- **Test / Test all links**: visits a link from the server and checks the
+  page for common "already used" phrases (plus any you set for its type).
+  This is a best-effort heuristic, not a guarantee — some activation
+  pages (including some of Google's) render their status with
+  JavaScript, which a server-side check can't see. A clean result means
+  "no used-link text found," not "confirmed working." Keep verifying
+  anything you're about to act on for a refund claim.
 
 ## 1. Push it to GitHub
 
-Unzip this project first. Then, **from inside that unzipped folder**
-(the one that directly contains `package.json` and `app/`):
+From inside this folder (the one that directly contains `package.json`
+and `app/`):
 
 ```bash
 git init
@@ -27,9 +46,8 @@ gh repo create ledger-app --private --source=. --push
 # (or create a repo on github.com and `git remote add origin ...` + `git push`)
 ```
 
-This matters: `package.json` and `app/` need to sit at the **root of the
-repo**, not inside a subfolder — see Troubleshooting below if you hit a
-build error about this.
+`package.json` and `app/` need to sit at the root of whatever folder you
+push — see Troubleshooting below if you hit a build error about this.
 
 ## 2. Deploy on Vercel
 
@@ -41,26 +59,24 @@ in the next step — that's expected.
 
 ## 3. Add the database
 
-1. In your Vercel project, go to the **Storage** tab.
-2. Click **Create Database** (or **Marketplace**) → choose a **Redis**
-   option (Upstash-backed, has a free tier).
-3. Connect it to your project when prompted — this automatically adds
-   `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_URL` /
-   `UPSTASH_REDIS_REST_TOKEN`) environment variables for you. The app
-   reads either naming.
-4. Redeploy (Vercel usually prompts you to; otherwise go to
-   **Deployments → ⋯ → Redeploy**).
+The free tier is easiest to set up directly through Upstash rather than
+Vercel's Marketplace flow:
+
+1. Go to https://upstash.com, sign up, and create a **Redis** database on
+   the **Free** plan.
+2. On the database's page, copy `UPSTASH_REDIS_REST_URL` and
+   `UPSTASH_REDIS_REST_TOKEN` from the REST API section.
+3. In your Vercel project: **Settings → Environment Variables**, add both
+   as variables (matching those exact names), targeting Production.
+4. Redeploy: **Deployments → ⋯ on the latest one → Redeploy**.
 
 ## Local development
 
 ```bash
 npm install
-vercel env pull .env.local   # requires the Vercel CLI, pulls your DB credentials
+# create .env.local with UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN
 npm run dev
 ```
-
-Without those DB env vars set locally, `/api/data` will error — either
-pull them as above, or just develop against the deployed version.
 
 ## Troubleshooting
 
@@ -77,6 +93,13 @@ Fix either by:
   to the subfolder name (e.g. `ledger-app`) instead of leaving it blank,
   then redeploy.
 
+**Site looks unchanged after pushing new files**
+
+- Check the **Deployments** tab for a new one matching your latest
+  commit, and that it says **Ready**.
+- Hard-refresh the page (Ctrl/Cmd+Shift+R) or open it in a private
+  window — this is often just a cached copy in your browser.
+
 ## Extending it
 
 - **A password or login**: this version has none — anyone with the URL
@@ -89,3 +112,4 @@ Fix either by:
 - **Editing existing batches**: right now you can delete a batch but not
   edit its product name or price after creation — straightforward to add
   if you need it.
+

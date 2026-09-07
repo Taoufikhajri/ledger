@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const EMPTY = { suppliers: [], batches: [] };
+const EMPTY = { suppliers: [], types: [], batches: [] };
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -13,6 +13,10 @@ function todayISO() {
 function money(n) {
   return `$${(n || 0).toFixed(2)}`;
 }
+function extractUrls(text) {
+  const matches = text.match(/https?:\/\/[^\s"'<>]+/g);
+  return matches ? Array.from(new Set(matches)) : [];
+}
 
 export default function Page() {
   const [data, setData] = useState(EMPTY);
@@ -20,13 +24,19 @@ export default function Page() {
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [supplierFilter, setSupplierFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(null); // 'supplier' | 'batch' | null
+  const [modal, setModal] = useState(null); // 'supplier' | 'type' | 'batch' | null
   const [toast, setToast] = useState('');
+  const [checks, setChecks] = useState({}); // linkId -> { state, looksUsed, status, error }
   const toastTimer = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(true);
+
+  const suppliers = data.suppliers || [];
+  const types = data.types || [];
+  const batches = data.batches || [];
 
   // ---- initial load ----
   useEffect(() => {
@@ -36,7 +46,7 @@ export default function Page() {
         if (d && d.error) {
           setLoadError(d.error);
         } else if (d && Array.isArray(d.suppliers) && Array.isArray(d.batches)) {
-          setData(d);
+          setData({ suppliers: d.suppliers, types: d.types || [], batches: d.batches });
         } else {
           setData(EMPTY);
         }
@@ -79,9 +89,7 @@ export default function Page() {
   }
 
   // ---- derived ----
-  const allLinks = data.batches.flatMap((b) =>
-    b.links.map((l) => ({ link: l, batch: b }))
-  );
+  const allLinks = batches.flatMap((b) => b.links.map((l) => ({ link: l, batch: b })));
   const totalLinks = allLinks.length;
   const activeCount = allLinks.filter((x) => x.link.status === 'active').length;
   const expiredCount = allLinks.filter((x) => x.link.status === 'expired').length;
@@ -94,13 +102,16 @@ export default function Page() {
     .reduce((sum, x) => sum + (x.batch.pricePerLink || 0), 0);
 
   const supplierCounts = {};
-  data.batches.forEach((b) => {
+  const typeCounts = {};
+  batches.forEach((b) => {
     supplierCounts[b.supplierId] = (supplierCounts[b.supplierId] || 0) + b.links.length;
+    if (b.typeId) typeCounts[b.typeId] = (typeCounts[b.typeId] || 0) + b.links.length;
   });
 
   const q = search.trim().toLowerCase();
-  const visibleBatches = data.batches
+  const visibleBatches = batches
     .filter((b) => supplierFilter === 'all' || b.supplierId === supplierFilter)
+    .filter((b) => typeFilter === 'all' || b.typeId === typeFilter)
     .map((b) => {
       let links = b.links;
       if (statusFilter !== 'all') links = links.filter((l) => l.status === statusFilter);
@@ -111,20 +122,36 @@ export default function Page() {
 
   // ---- mutations ----
   function addSupplier(name) {
-    setData((d) => ({ ...d, suppliers: [...d.suppliers, { id: uid(), name: name.trim() }] }));
+    setData((d) => ({ ...d, suppliers: [...(d.suppliers || []), { id: uid(), name: name.trim() }] }));
   }
 
   function deleteSupplier(id) {
-    if (data.batches.some((b) => b.supplierId === id)) {
+    if (batches.some((b) => b.supplierId === id)) {
       showToast("Can't delete — supplier has batches");
       return;
     }
-    setData((d) => ({ ...d, suppliers: d.suppliers.filter((s) => s.id !== id) }));
+    setData((d) => ({ ...d, suppliers: (d.suppliers || []).filter((s) => s.id !== id) }));
     if (supplierFilter === id) setSupplierFilter('all');
   }
 
-  function addBatch({ supplierId, product, purchaseDate, pricePerLink, linksText }) {
-    const urls = linksText.split('\n').map((s) => s.trim()).filter(Boolean);
+  function addType(name, invalidText) {
+    setData((d) => ({
+      ...d,
+      types: [...(d.types || []), { id: uid(), name: name.trim(), invalidText: (invalidText || '').trim() }],
+    }));
+  }
+
+  function deleteType(id) {
+    if (batches.some((b) => b.typeId === id)) {
+      showToast("Can't delete — a batch uses this type");
+      return;
+    }
+    setData((d) => ({ ...d, types: (d.types || []).filter((t) => t.id !== id) }));
+    if (typeFilter === id) setTypeFilter('all');
+  }
+
+  function addBatch({ supplierId, typeId, product, purchaseDate, pricePerLink, linksText }) {
+    const urls = extractUrls(linksText);
     const links = urls.map((url) => ({
       id: uid(),
       url,
@@ -134,16 +161,17 @@ export default function Page() {
     const batch = {
       id: uid(),
       supplierId,
+      typeId: typeId || null,
       product: product.trim(),
       purchaseDate: purchaseDate || todayISO(),
       pricePerLink: pricePerLink || 0,
       links,
     };
-    setData((d) => ({ ...d, batches: [batch, ...d.batches] }));
+    setData((d) => ({ ...d, batches: [batch, ...(d.batches || [])] }));
   }
 
   function deleteBatch(id) {
-    setData((d) => ({ ...d, batches: d.batches.filter((b) => b.id !== id) }));
+    setData((d) => ({ ...d, batches: (d.batches || []).filter((b) => b.id !== id) }));
   }
 
   function setLinkStatus(batchId, linkId, status) {
@@ -164,6 +192,11 @@ export default function Page() {
         b.id !== batchId ? b : { ...b, links: b.links.filter((l) => l.id !== linkId) }
       ),
     }));
+    setChecks((c) => {
+      const next = { ...c };
+      delete next[linkId];
+      return next;
+    });
   }
 
   function copyLink(url) {
@@ -171,11 +204,20 @@ export default function Page() {
   }
 
   function exportCSV() {
-    const rows = [['Supplier', 'Product', 'Link', 'Status', 'Date added', 'Price per link']];
+    const rows = [['Supplier', 'Type', 'Product', 'Link', 'Status', 'Date added', 'Price per link']];
     visibleBatches.forEach((b) => {
-      const sup = data.suppliers.find((s) => s.id === b.supplierId);
+      const sup = suppliers.find((s) => s.id === b.supplierId);
+      const typ = types.find((t) => t.id === b.typeId);
       b.links.forEach((l) => {
-        rows.push([sup ? sup.name : 'Unknown', b.product, l.url, l.status, l.addedDate, b.pricePerLink || 0]);
+        rows.push([
+          sup ? sup.name : 'Unknown',
+          typ ? typ.name : '',
+          b.product,
+          l.url,
+          l.status,
+          l.addedDate,
+          b.pricePerLink || 0,
+        ]);
       });
     });
     const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -184,6 +226,45 @@ export default function Page() {
     a.href = URL.createObjectURL(blob);
     a.download = 'ledger_export.csv';
     a.click();
+  }
+
+  // ---- link testing ----
+  function phrasesForBatch(batch) {
+    const typ = types.find((t) => t.id === batch.typeId);
+    if (!typ || !typ.invalidText) return [];
+    return typ.invalidText
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+  }
+
+  async function testLink(link, batch) {
+    setChecks((c) => ({ ...c, [link.id]: { state: 'checking' } }));
+    try {
+      const res = await fetch('/api/check-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: link.url, extraPhrases: phrasesForBatch(batch) }),
+      });
+      const result = await res.json();
+      if (result.ok) {
+        setChecks((c) => ({
+          ...c,
+          [link.id]: { state: 'done', looksUsed: result.looksUsed, status: result.status },
+        }));
+      } else {
+        setChecks((c) => ({ ...c, [link.id]: { state: 'error', error: result.error || 'Check failed' } }));
+      }
+    } catch (e) {
+      setChecks((c) => ({ ...c, [link.id]: { state: 'error', error: 'Check failed' } }));
+    }
+  }
+
+  async function testBatch(batch) {
+    for (const link of batch.links) {
+      // eslint-disable-next-line no-await-in-loop
+      await testLink(link, batch);
+    }
   }
 
   if (!loaded) {
@@ -224,9 +305,9 @@ export default function Page() {
             onClick={() => setSupplierFilter('all')}
           >
             <span>All suppliers</span>
-            <span className="count mono">{data.batches.reduce((n, b) => n + b.links.length, 0)}</span>
+            <span className="count mono">{batches.reduce((n, b) => n + b.links.length, 0)}</span>
           </div>
-          {data.suppliers.map((s) => (
+          {suppliers.map((s) => (
             <div
               key={s.id}
               className={`supplier-item ${supplierFilter === s.id ? 'active' : ''}`}
@@ -234,6 +315,28 @@ export default function Page() {
             >
               <span>{s.name}</span>
               <span className="count mono">{supplierCounts[s.id] || 0}</span>
+            </div>
+          ))}
+        </div>
+
+        <button className="btn btn-block" onClick={() => setModal('type')}>
+          + Add type
+        </button>
+        <div className="supplier-list">
+          <div
+            className={`supplier-item ${typeFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setTypeFilter('all')}
+          >
+            <span>All types</span>
+          </div>
+          {types.map((t) => (
+            <div
+              key={t.id}
+              className={`supplier-item ${typeFilter === t.id ? 'active' : ''}`}
+              onClick={() => setTypeFilter(t.id)}
+            >
+              <span>{t.name}</span>
+              <span className="count mono">{typeCounts[t.id] || 0}</span>
             </div>
           ))}
         </div>
@@ -290,17 +393,23 @@ export default function Page() {
 
         {visibleBatches.length ? (
           visibleBatches.map((b) => {
-            const sup = data.suppliers.find((s) => s.id === b.supplierId);
+            const sup = suppliers.find((s) => s.id === b.supplierId);
+            const typ = types.find((t) => t.id === b.typeId);
+            const anyChecking = b.links.some((l) => checks[l.id]?.state === 'checking');
             return (
               <div className="batch" key={b.id}>
                 <div className="batch-head">
                   <span className="product">{b.product}</span>
                   <span className="tag">{sup ? sup.name : 'Unknown supplier'}</span>
+                  {typ && <span className="tag">{typ.name}</span>}
                   <span className="date mono">{b.purchaseDate}</span>
                   {b.pricePerLink ? (
                     <span className="price mono">{money(b.pricePerLink)}/link</span>
                   ) : null}
                   <span className="spacer"></span>
+                  <button className="btn btn-sm" disabled={anyChecking} onClick={() => testBatch(b)}>
+                    {anyChecking ? 'Testing…' : 'Test all links'}
+                  </button>
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() => {
@@ -312,43 +421,76 @@ export default function Page() {
                 </div>
                 <table className="links-table">
                   <tbody>
-                    {b.links.map((l) => (
-                      <tr key={l.id}>
-                        <td>
-                          <span className="link-url mono" title={l.url} onClick={() => copyLink(l.url)}>
-                            {l.url}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={`pill ${l.status}`}>{l.status}</span>
-                        </td>
-                        <td className="mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
-                          {l.addedDate}
-                        </td>
-                        <td>
-                          <div className="row-actions">
-                            {l.status === 'active' && (
-                              <button className="btn btn-sm" onClick={() => setLinkStatus(b.id, l.id, 'expired')}>
-                                Mark expired
-                              </button>
+                    {b.links.map((l) => {
+                      const check = checks[l.id];
+                      return (
+                        <tr key={l.id}>
+                          <td>
+                            <span className="link-url mono" title={l.url} onClick={() => copyLink(l.url)}>
+                              {l.url}
+                            </span>
+                            {check && check.state === 'checking' && (
+                              <div className="check-result unknown">Checking…</div>
                             )}
-                            {l.status === 'expired' && (
-                              <button className="btn btn-sm" onClick={() => setLinkStatus(b.id, l.id, 'refunded')}>
-                                Mark refunded
-                              </button>
+                            {check && check.state === 'error' && (
+                              <div className="check-result unknown">{check.error}</div>
                             )}
-                            {l.status !== 'active' && (
-                              <button className="btn btn-ghost btn-sm" onClick={() => setLinkStatus(b.id, l.id, 'active')}>
-                                Reactivate
-                              </button>
+                            {check && check.state === 'done' && check.looksUsed && (
+                              <div className="check-result used">
+                                Looks used
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  style={{ marginLeft: 6 }}
+                                  onClick={() => setLinkStatus(b.id, l.id, 'expired')}
+                                >
+                                  Apply: mark expired
+                                </button>
+                              </div>
                             )}
-                            <button className="btn btn-ghost btn-sm" onClick={() => deleteLink(b.id, l.id)}>
-                              Remove
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                            {check && check.state === 'done' && !check.looksUsed && (
+                              <div className="check-result ok">
+                                No used-link text found (status {check.status})
+                              </div>
+                            )}
+                          </td>
+                          <td>
+                            <span className={`pill ${l.status}`}>{l.status}</span>
+                          </td>
+                          <td className="mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
+                            {l.addedDate}
+                          </td>
+                          <td>
+                            <div className="row-actions">
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                disabled={check?.state === 'checking'}
+                                onClick={() => testLink(l, b)}
+                              >
+                                Test
+                              </button>
+                              {l.status === 'active' && (
+                                <button className="btn btn-sm" onClick={() => setLinkStatus(b.id, l.id, 'expired')}>
+                                  Mark expired
+                                </button>
+                              )}
+                              {l.status === 'expired' && (
+                                <button className="btn btn-sm" onClick={() => setLinkStatus(b.id, l.id, 'refunded')}>
+                                  Mark refunded
+                                </button>
+                              )}
+                              {l.status !== 'active' && (
+                                <button className="btn btn-ghost btn-sm" onClick={() => setLinkStatus(b.id, l.id, 'active')}>
+                                  Reactivate
+                                </button>
+                              )}
+                              <button className="btn btn-ghost btn-sm" onClick={() => deleteLink(b.id, l.id)}>
+                                Remove
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -358,7 +500,7 @@ export default function Page() {
           <div className="empty">
             <h3>Nothing here yet</h3>
             <p>
-              {data.batches.length === 0
+              {batches.length === 0
                 ? 'Add a supplier, then log your first batch of links.'
                 : 'No links match this filter.'}
             </p>
@@ -369,9 +511,13 @@ export default function Page() {
       {modal === 'supplier' && (
         <SupplierModal onClose={() => setModal(null)} onSubmit={addSupplier} onError={showToast} />
       )}
+      {modal === 'type' && (
+        <TypeModal onClose={() => setModal(null)} onSubmit={addType} onError={showToast} />
+      )}
       {modal === 'batch' && (
         <BatchModal
-          suppliers={data.suppliers}
+          suppliers={suppliers}
+          types={types}
           onClose={() => setModal(null)}
           onSubmit={addBatch}
           onError={showToast}
@@ -422,8 +568,61 @@ function SupplierModal({ onClose, onSubmit, onError }) {
   );
 }
 
-function BatchModal({ suppliers, onClose, onSubmit, onError, onAddSupplierInstead }) {
+function TypeModal({ onClose, onSubmit, onError }) {
+  const [name, setName] = useState('');
+  const [invalidText, setInvalidText] = useState('');
+  return (
+    <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <h2>Add product type</h2>
+        <div className="field">
+          <label>Type name</label>
+          <input
+            autoFocus
+            placeholder="e.g. Gemini Pro, Netflix, Spotify…"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>"Already used" phrases (optional)</label>
+          <input
+            placeholder="e.g. already in use, already been used"
+            value={invalidText}
+            onChange={(e) => setInvalidText(e.target.value)}
+          />
+          <div className="hint">
+            Comma-separated text that appears on this type's activation page when a link has
+            already been used. Used by the "Test" button. A few generic phrases are always
+            checked too — this just adds ones specific to this service.
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              if (!name.trim()) {
+                onError('Enter a type name');
+                return;
+              }
+              onSubmit(name, invalidText);
+              onClose();
+            }}
+          >
+            Add type
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BatchModal({ suppliers, types, onClose, onSubmit, onError, onAddSupplierInstead }) {
   const [supplierId, setSupplierId] = useState(suppliers[0]?.id || '');
+  const [typeId, setTypeId] = useState('');
   const [product, setProduct] = useState('');
   const [purchaseDate, setPurchaseDate] = useState(todayISO());
   const [pricePerLink, setPricePerLink] = useState('');
@@ -463,6 +662,18 @@ function BatchModal({ suppliers, onClose, onSubmit, onError, onAddSupplierInstea
           </select>
         </div>
         <div className="field">
+          <label>Type (optional)</label>
+          <select value={typeId} onChange={(e) => setTypeId(e.target.value)}>
+            <option value="">No type</option>
+            {types.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          <div className="hint">Add types from the sidebar's "+ Add type" button.</div>
+        </div>
+        <div className="field">
           <label>Product</label>
           <input
             placeholder="e.g. Gemini Pro — 18 Months"
@@ -489,11 +700,13 @@ function BatchModal({ suppliers, onClose, onSubmit, onError, onAddSupplierInstea
         <div className="field">
           <label>Links</label>
           <textarea
-            placeholder="Paste one link per line"
+            placeholder="Paste anything containing links — numbered lists, bot messages, extra text. Anything starting with http:// or https:// is picked up."
             value={linksText}
             onChange={(e) => setLinksText(e.target.value)}
           />
-          <div className="hint">Each line becomes its own tracked link, tagged to this supplier.</div>
+          <div className="hint">
+            {extractUrls(linksText).length} link(s) detected in the text above.
+          </div>
         </div>
         <div className="modal-actions">
           <button className="btn btn-ghost" onClick={onClose}>
@@ -506,12 +719,14 @@ function BatchModal({ suppliers, onClose, onSubmit, onError, onAddSupplierInstea
                 onError('Enter a product name');
                 return;
               }
-              if (!linksText.trim()) {
-                onError('Paste at least one link');
+              const urls = extractUrls(linksText);
+              if (urls.length === 0) {
+                onError('No links detected — check the pasted text');
                 return;
               }
               onSubmit({
                 supplierId,
+                typeId,
                 product,
                 purchaseDate,
                 pricePerLink: parseFloat(pricePerLink) || 0,

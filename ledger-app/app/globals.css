@@ -149,6 +149,10 @@ input, select, textarea{font-family:inherit;font-size:13px;}
   display:inline-block;
 }
 .link-url:hover{color:var(--text);}
+.check-result{font-size:11px;margin-top:3px;}
+.check-result.used{color:var(--red);}
+.check-result.ok{color:var(--mint);}
+.check-result.unknown{color:var(--muted);}
 .pill{
   display:inline-block;font-size:11px;padding:3px 9px;border-radius:20px;font-weight:500;
 }
