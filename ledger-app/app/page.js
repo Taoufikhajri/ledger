@@ -31,6 +31,8 @@ export default function Page() {
   const [toast, setToast] = useState('');
   const [checks, setChecks] = useState({}); // linkId -> { state, looksUsed, status, error }
   const [testingSupplier, setTestingSupplier] = useState(null);
+  const [verifyQueue, setVerifyQueue] = useState([]); // [{ batchId, linkId, url }]
+  const [verifyIndex, setVerifyIndex] = useState(0);
   const toastTimer = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(true);
@@ -229,6 +231,78 @@ export default function Page() {
     a.click();
   }
 
+  // ---- active links matching the current supplier/type/search filters ----
+  // (ignores the status dropdown on purpose — verifying and the AYMEN list
+  // are always about active links specifically)
+  function activeLinksForCurrentFilters() {
+    const q = search.trim().toLowerCase();
+    const list = [];
+    batches
+      .filter((b) => supplierFilter === 'all' || b.supplierId === supplierFilter)
+      .filter((b) => typeFilter === 'all' || b.typeId === typeFilter)
+      .forEach((b) => {
+        b.links.forEach((l) => {
+          if (l.status !== 'active') return;
+          if (q && !(l.url.toLowerCase().includes(q) || b.product.toLowerCase().includes(q))) return;
+          list.push({ batchId: b.id, linkId: l.id, url: l.url });
+        });
+      });
+    return list;
+  }
+
+  // ---- manual verify-links flow ----
+  function startVerify() {
+    const queue = activeLinksForCurrentFilters();
+    if (queue.length === 0) {
+      showToast('No active links to verify with the current filters');
+      return;
+    }
+    setVerifyQueue(queue);
+    setVerifyIndex(0);
+    window.open(queue[0].url, '_blank', 'noopener');
+  }
+
+  function reopenCurrentVerifyLink() {
+    const current = verifyQueue[verifyIndex];
+    if (current) window.open(current.url, '_blank', 'noopener');
+  }
+
+  function advanceVerify(action) {
+    const current = verifyQueue[verifyIndex];
+    if (!current) return;
+    if (action === 'remove') {
+      deleteLink(current.batchId, current.linkId);
+    }
+    const nextIndex = verifyIndex + 1;
+    if (nextIndex >= verifyQueue.length) {
+      setVerifyQueue([]);
+      setVerifyIndex(0);
+      showToast('Done verifying');
+      return;
+    }
+    setVerifyIndex(nextIndex);
+    window.open(verifyQueue[nextIndex].url, '_blank', 'noopener');
+  }
+
+  function stopVerify() {
+    setVerifyQueue([]);
+    setVerifyIndex(0);
+  }
+
+  // ---- copy the working-links list, AYMEN-separated ----
+  function copyWorkingList() {
+    const links = activeLinksForCurrentFilters().map((x) => x.url);
+    if (links.length === 0) {
+      showToast('No active links match the current filters');
+      return;
+    }
+    const text = links.join('\nAYMEN\n');
+    navigator.clipboard
+      .writeText(text)
+      .then(() => showToast(`Copied ${links.length} working link(s)`))
+      .catch(() => showToast('Could not copy — try again'));
+  }
+
   // ---- link testing ----
   function phrasesForBatch(batch) {
     const typ = types.find((t) => t.id === batch.typeId);
@@ -401,6 +475,12 @@ export default function Page() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <button className="btn" onClick={startVerify} disabled={verifyQueue.length > 0}>
+            Verify links
+          </button>
+          <button className="btn" onClick={copyWorkingList}>
+            Copy working list
+          </button>
           <button className="btn" onClick={exportCSV}>
             Export CSV
           </button>
@@ -569,6 +649,30 @@ export default function Page() {
           onError={showToast}
           onAddSupplierInstead={() => setModal('supplier')}
         />
+      )}
+
+      {verifyQueue.length > 0 && (
+        <div className="verify-bar">
+          <span className="mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
+            {verifyIndex + 1} / {verifyQueue.length}
+          </span>
+          <span className="link-url mono" title={verifyQueue[verifyIndex]?.url} style={{ maxWidth: 320 }}>
+            {verifyQueue[verifyIndex]?.url}
+          </span>
+          <button className="btn btn-sm" onClick={reopenCurrentVerifyLink}>
+            Reopen link
+          </button>
+          <span className="spacer"></span>
+          <button className="btn btn-primary btn-sm" onClick={() => advanceVerify('working')}>
+            Working
+          </button>
+          <button className="btn btn-sm" onClick={() => advanceVerify('remove')}>
+            Used — remove
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={stopVerify}>
+            Stop
+          </button>
+        </div>
       )}
 
       <div className={`toast ${toast ? 'show' : ''}`}>{toast}</div>
