@@ -17,6 +17,7 @@ function money(n) {
 export default function Page() {
   const [data, setData] = useState(EMPTY);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [supplierFilter, setSupplierFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -32,11 +33,17 @@ export default function Page() {
     fetch('/api/data')
       .then((r) => r.json())
       .then((d) => {
-        setData(d || EMPTY);
+        if (d && d.error) {
+          setLoadError(d.error);
+        } else if (d && Array.isArray(d.suppliers) && Array.isArray(d.batches)) {
+          setData(d);
+        } else {
+          setData(EMPTY);
+        }
         setLoaded(true);
       })
       .catch(() => {
-        showToast('Could not load your data — check your connection');
+        setLoadError('Could not reach the server. Check your connection and try refreshing.');
         setLoaded(true);
       });
   }, []);
@@ -181,6 +188,21 @@ export default function Page() {
 
   if (!loaded) {
     return <div className="center-loading">Loading ledger…</div>;
+  }
+
+  if (loadError) {
+    return (
+      <div className="center-loading">
+        <div style={{ maxWidth: 440, textAlign: 'left' }}>
+          <h2 style={{ marginBottom: 8 }}>Can't load your data</h2>
+          <p style={{ color: 'var(--muted)', marginBottom: 12 }}>{loadError}</p>
+          <p style={{ color: 'var(--muted)' }}>
+            If you haven't yet, connect a Redis database from your Vercel project's Storage
+            (or Marketplace) tab, then redeploy. See the README for step-by-step instructions.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
