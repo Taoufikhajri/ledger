@@ -17,6 +17,13 @@ function extractUrls(text) {
   const matches = text.match(/https?:\/\/[^\s"'<>]+/g);
   return matches ? Array.from(new Set(matches)) : [];
 }
+function batchRefPrefix(supplierName, dateStr) {
+  const initials = (supplierName || 'GEN').replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'GEN';
+  const d = new Date(dateStr || Date.now());
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${initials}${mm}${dd}`;
+}
 
 // The Ledger Link Verifier Chrome extension, if installed, lets links be
 // sent to it directly instead of verifying one by one in this tab. Update
@@ -24,7 +31,7 @@ function extractUrls(text) {
 // (its README explains how the ID is derived).
 const EXTENSION_ID = 'ajfinjgibbglcmfgdogecjohgjafbiif';
 
-function sendToExtension(urls, extraPhrases) {
+function sendToExtension(links, extraPhrases) {
   return new Promise((resolve) => {
     if (typeof window === 'undefined' || !window.chrome || !window.chrome.runtime || !window.chrome.runtime.sendMessage) {
       resolve({ ok: false, error: 'not-available' });
@@ -33,7 +40,7 @@ function sendToExtension(urls, extraPhrases) {
     try {
       window.chrome.runtime.sendMessage(
         EXTENSION_ID,
-        { type: 'VERIFY', urls, phrases: extraPhrases },
+        { type: 'VERIFY', links, phrases: extraPhrases },
         (response) => {
           if (window.chrome.runtime.lastError || !response) {
             resolve({ ok: false, error: window.chrome.runtime.lastError?.message || 'no-response' });
@@ -185,10 +192,14 @@ export default function Page() {
 
   function addBatch({ supplierId, typeId, product, purchaseDate, pricePerLink, linksText }) {
     const urls = extractUrls(linksText);
-    const links = urls.map((url) => ({
+    const sup = suppliers.find((s) => s.id === supplierId);
+    const prefix = batchRefPrefix(sup?.name, purchaseDate);
+    const links = urls.map((url, i) => ({
       id: uid(),
+      ref: `${prefix}-${String(i + 1).padStart(3, '0')}`,
       url,
       status: 'active',
+      sentToBot: false,
       addedDate: purchaseDate || todayISO(),
     }));
     const batch = {
@@ -218,6 +229,17 @@ export default function Page() {
     }));
   }
 
+  function setLinkSentToBot(batchId, linkId, sentToBot) {
+    setData((d) => ({
+      ...d,
+      batches: d.batches.map((b) =>
+        b.id !== batchId
+          ? b
+          : { ...b, links: b.links.map((l) => (l.id === linkId ? { ...l, sentToBot } : l)) }
+      ),
+    }));
+  }
+
   function deleteLink(batchId, linkId) {
     setData((d) => ({
       ...d,
@@ -237,17 +259,21 @@ export default function Page() {
   }
 
   function exportCSV() {
-    const rows = [['Supplier', 'Type', 'Product', 'Link', 'Status', 'Date added', 'Price per link']];
+    const rows = [
+      ['Ref', 'Supplier', 'Type', 'Product', 'Link', 'Status', 'Sent to bot', 'Date added', 'Price per link'],
+    ];
     visibleBatches.forEach((b) => {
       const sup = suppliers.find((s) => s.id === b.supplierId);
       const typ = types.find((t) => t.id === b.typeId);
       b.links.forEach((l) => {
         rows.push([
+          l.ref || '',
           sup ? sup.name : 'Unknown',
           typ ? typ.name : '',
           b.product,
           l.url,
           l.status,
+          l.sentToBot ? 'yes' : 'no',
           l.addedDate,
           b.pricePerLink || 0,
         ]);
@@ -274,7 +300,7 @@ export default function Page() {
         b.links.forEach((l) => {
           if (l.status !== 'active') return;
           if (q && !(l.url.toLowerCase().includes(q) || b.product.toLowerCase().includes(q))) return;
-          list.push({ batchId: b.id, linkId: l.id, url: l.url });
+          list.push({ batchId: b.id, linkId: l.id, url: l.url, ref: l.ref || l.id.slice(0, 6).toUpperCase() });
         });
       });
     return list;
@@ -289,15 +315,15 @@ export default function Page() {
       return;
     }
 
-    const urls = queue.map((x) => x.url);
     const relevantBatchIds = new Set(queue.map((x) => x.batchId));
     const extraPhrases = Array.from(
       new Set(batches.filter((b) => relevantBatchIds.has(b.id)).flatMap((b) => phrasesForBatch(b)))
     );
+    const links = queue.map((x) => ({ url: x.url, ref: x.ref }));
 
-    const extResult = await sendToExtension(urls, extraPhrases);
+    const extResult = await sendToExtension(links, extraPhrases);
     if (extResult.ok) {
-      showToast(`Sent ${urls.length} link(s) to the Ledger Link Verifier extension — open it to watch progress`);
+      showToast(`Sent ${links.length} link(s) to the Ledger Link Verifier extension — open it to watch progress`);
       return;
     }
 
@@ -315,7 +341,7 @@ export default function Page() {
   function verifyBatch(batch) {
     const queue = batch.links
       .filter((l) => l.status === 'active')
-      .map((l) => ({ batchId: batch.id, linkId: l.id, url: l.url }));
+      .map((l) => ({ batchId: batch.id, linkId: l.id, url: l.url, ref: l.ref || l.id.slice(0, 6).toUpperCase() }));
     return verifyLinks(queue);
   }
 
@@ -538,6 +564,9 @@ export default function Page() {
           <button className="btn" onClick={copyWorkingList}>
             Copy working list
           </button>
+          <button className="btn" onClick={() => setModal('check')}>
+            Check links
+          </button>
           <button className="btn" onClick={exportCSV}>
             Export CSV
           </button>
@@ -603,6 +632,9 @@ export default function Page() {
                       const check = checks[l.id];
                       return (
                         <tr key={l.id}>
+                          <td className="mono" style={{ color: 'var(--muted)', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {l.ref || l.id.slice(0, 6).toUpperCase()}
+                          </td>
                           <td>
                             <span className="link-url mono" title={l.url} onClick={() => copyLink(l.url)}>
                               {l.url}
@@ -637,6 +669,14 @@ export default function Page() {
                           </td>
                           <td>
                             <span className={`pill ${l.status}`}>{l.status}</span>
+                          </td>
+                          <td>
+                            <button
+                              className={`btn btn-sm ${l.sentToBot ? 'btn-primary' : 'btn-ghost'}`}
+                              onClick={() => setLinkSentToBot(b.id, l.id, !l.sentToBot)}
+                            >
+                              {l.sentToBot ? 'Sent to bot' : 'Not sent'}
+                            </button>
                           </td>
                           <td className="mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
                             {l.addedDate}
@@ -705,6 +745,9 @@ export default function Page() {
           onError={showToast}
           onAddSupplierInstead={() => setModal('supplier')}
         />
+      )}
+      {modal === 'check' && (
+        <CheckLinksModal batches={batches} suppliers={suppliers} onClose={() => setModal(null)} />
       )}
 
       {verifyQueue.length > 0 && (
@@ -942,6 +985,113 @@ function BatchModal({ suppliers, types, onClose, onSubmit, onError, onAddSupplie
             }}
           >
             Save batch
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CheckLinksModal({ batches, suppliers, onClose }) {
+  const [pastedText, setPastedText] = useState('');
+  const [results, setResults] = useState(null); // null until checked
+
+  function runCheck() {
+    const pasted = extractUrls(pastedText);
+    if (pasted.length === 0) {
+      setResults([]);
+      return;
+    }
+    const index = new Map();
+    batches.forEach((b) => {
+      b.links.forEach((l) => {
+        index.set(l.url, { batch: b, link: l });
+      });
+    });
+    const computed = pasted.map((url) => {
+      const hit = index.get(url);
+      if (!hit) return { url, found: false };
+      const sup = suppliers.find((s) => s.id === hit.batch.supplierId);
+      return {
+        url,
+        found: true,
+        ref: hit.link.ref || hit.link.id.slice(0, 6).toUpperCase(),
+        supplierName: sup ? sup.name : 'Unknown',
+        product: hit.batch.product,
+        status: hit.link.status,
+      };
+    });
+    setResults(computed);
+  }
+
+  const foundCount = results ? results.filter((r) => r.found).length : 0;
+
+  return (
+    <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 560 }}>
+        <h2>Check links against your batches</h2>
+        <div className="field">
+          <label>Paste links to check</label>
+          <textarea
+            placeholder="Paste any text containing links — matches against everything saved in your ledger"
+            value={pastedText}
+            onChange={(e) => setPastedText(e.target.value)}
+          />
+          <div className="hint">{extractUrls(pastedText).length} link(s) detected in the text above.</div>
+        </div>
+
+        {results !== null && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: 'var(--muted)', fontSize: 12, marginBottom: 8 }}>
+              {foundCount} of {results.length} found in your batches
+            </div>
+            <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
+              {results.length === 0 ? (
+                <div style={{ padding: 12, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+                  No links detected in the pasted text.
+                </div>
+              ) : (
+                results.map((r, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      padding: '8px 10px',
+                      borderBottom: i < results.length - 1 ? '1px solid var(--border)' : 'none',
+                      fontSize: 12,
+                    }}
+                  >
+                    <div
+                      className="mono"
+                      style={{
+                        color: 'var(--muted)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={r.url}
+                    >
+                      {r.url}
+                    </div>
+                    {r.found ? (
+                      <div className="check-result ok">
+                        Found — {r.ref} · {r.supplierName} · {r.product} · {r.status}
+                      </div>
+                    ) : (
+                      <div className="check-result used">Not in your batches</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="modal-actions">
+          <button className="btn btn-ghost" onClick={onClose}>
+            Close
+          </button>
+          <button className="btn btn-primary" onClick={runCheck}>
+            Check
           </button>
         </div>
       </div>
