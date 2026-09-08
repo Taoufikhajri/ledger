@@ -281,10 +281,11 @@ export default function Page() {
   }
 
   // ---- verify-links flow (extension first, in-app fallback) ----
-  async function startVerify() {
-    const queue = activeLinksForCurrentFilters();
+  // Reusable for both the topbar's filter-scoped button and a single
+  // batch's own button.
+  async function verifyLinks(queue) {
     if (queue.length === 0) {
-      showToast('No active links to verify with the current filters');
+      showToast('No active links to verify');
       return;
     }
 
@@ -305,6 +306,17 @@ export default function Page() {
     setVerifyQueue(queue);
     setVerifyIndex(0);
     window.open(queue[0].url, '_blank', 'noopener');
+  }
+
+  function startVerify() {
+    return verifyLinks(activeLinksForCurrentFilters());
+  }
+
+  function verifyBatch(batch) {
+    const queue = batch.links
+      .filter((l) => l.status === 'active')
+      .map((l) => ({ batchId: batch.id, linkId: l.id, url: l.url }));
+    return verifyLinks(queue);
   }
 
   function reopenCurrentVerifyLink() {
@@ -562,7 +574,6 @@ export default function Page() {
           visibleBatches.map((b) => {
             const sup = suppliers.find((s) => s.id === b.supplierId);
             const typ = types.find((t) => t.id === b.typeId);
-            const anyChecking = b.links.some((l) => checks[l.id]?.state === 'checking');
             return (
               <div className="batch" key={b.id}>
                 <div className="batch-head">
@@ -574,8 +585,8 @@ export default function Page() {
                     <span className="price mono">{money(b.pricePerLink)}/link</span>
                   ) : null}
                   <span className="spacer"></span>
-                  <button className="btn btn-sm" disabled={anyChecking} onClick={() => testBatch(b)}>
-                    {anyChecking ? 'Testing…' : 'Test all links'}
+                  <button className="btn btn-sm" onClick={() => verifyBatch(b)}>
+                    Verify links
                   </button>
                   <button
                     className="btn btn-ghost btn-sm"
