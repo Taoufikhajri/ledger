@@ -55,6 +55,26 @@ function sendToExtension(links, extraPhrases) {
   });
 }
 
+function getResultsFromExtension(urls) {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !window.chrome || !window.chrome.runtime || !window.chrome.runtime.sendMessage) {
+      resolve({ ok: false, error: 'not-available' });
+      return;
+    }
+    try {
+      window.chrome.runtime.sendMessage(EXTENSION_ID, { type: 'GET_RESULTS', urls }, (response) => {
+        if (window.chrome.runtime.lastError || !response) {
+          resolve({ ok: false, error: window.chrome.runtime.lastError?.message || 'no-response' });
+        } else {
+          resolve(response);
+        }
+      });
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+    }
+  });
+}
+
 export default function Page() {
   const [data, setData] = useState(EMPTY);
   const [loaded, setLoaded] = useState(false);
@@ -73,6 +93,8 @@ export default function Page() {
   const toastTimer = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(true);
+  const pollTimer = useRef(null);
+  const pendingUrls = useRef([]);
 
   const suppliers = data.suppliers || [];
   const types = data.types || [];
@@ -121,6 +143,12 @@ export default function Page() {
     }, 400);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+    };
+  }, []);
 
   function showToast(msg) {
     setToast(msg);
@@ -260,7 +288,7 @@ export default function Page() {
 
   function exportCSV() {
     const rows = [
-      ['Ref', 'Supplier', 'Type', 'Product', 'Link', 'Status', 'Sent to bot', 'Date added', 'Price per link'],
+      ['Ref', 'Supplier', 'Type', 'Product', 'Link', 'Status', 'Verification', 'Sent to bot', 'Date added', 'Price per link'],
     ];
     visibleBatches.forEach((b) => {
       const sup = suppliers.find((s) => s.id === b.supplierId);
@@ -273,6 +301,7 @@ export default function Page() {
           b.product,
           l.url,
           l.status,
+          l.verifyResult || '',
           l.sentToBot ? 'yes' : 'no',
           l.addedDate,
           b.pricePerLink || 0,
@@ -309,6 +338,59 @@ export default function Page() {
   // ---- verify-links flow (extension first, in-app fallback) ----
   // Reusable for both the topbar's filter-scoped button and a single
   // batch's own button.
+  function applyExtensionResults(results) {
+    if (!results || Object.keys(results).length === 0) return 0;
+    let appliedCount = 0;
+    setData((d) => ({
+      ...d,
+      batches: d.batches.map((b) => ({
+        ...b,
+        links: b.links.map((l) => {
+          const r = results[l.url];
+          if (!r) return l;
+          const status = typeof r === 'string' ? r : r.status;
+          const verifyResult = status === 'used' ? 'used' : status === 'working' ? 'working' : l.verifyResult || null;
+          const newStatus = status === 'used' && l.status === 'active' ? 'expired' : l.status;
+          if (verifyResult === l.verifyResult && newStatus === l.status) return l;
+          appliedCount += 1;
+          return { ...l, verifyResult, status: newStatus };
+        }),
+      })),
+    }));
+    return appliedCount;
+  }
+
+  function pollForResults(urls) {
+    pendingUrls.current = urls;
+    if (pollTimer.current) clearInterval(pollTimer.current);
+    pollTimer.current = setInterval(async () => {
+      const res = await getResultsFromExtension(pendingUrls.current);
+      if (!res.ok || !res.results) return;
+      applyExtensionResults(res.results);
+      pendingUrls.current = pendingUrls.current.filter((u) => !res.results[u]);
+      if (pendingUrls.current.length === 0) {
+        clearInterval(pollTimer.current);
+        pollTimer.current = null;
+        showToast('Verification results synced to your batches');
+      }
+    }, 4000);
+  }
+
+  async function syncFromExtension() {
+    const allUrls = batches.flatMap((b) => b.links.map((l) => l.url));
+    if (allUrls.length === 0) {
+      showToast('No links to sync');
+      return;
+    }
+    const res = await getResultsFromExtension(allUrls);
+    if (!res.ok) {
+      showToast('Could not reach the Ledger Link Verifier extension');
+      return;
+    }
+    const count = applyExtensionResults(res.results);
+    showToast(count ? `Synced ${count} result(s) from the extension` : 'No new results to sync yet');
+  }
+
   async function verifyLinks(queue) {
     if (queue.length === 0) {
       showToast('No active links to verify');
@@ -323,7 +405,8 @@ export default function Page() {
 
     const extResult = await sendToExtension(links, extraPhrases);
     if (extResult.ok) {
-      showToast(`Sent ${links.length} link(s) to the Ledger Link Verifier extension — open it to watch progress`);
+      showToast(`Sent ${links.length} link(s) to the Ledger Link Verifier extension — results will sync back automatically`);
+      pollForResults(links.map((l) => l.url));
       return;
     }
 
@@ -564,6 +647,9 @@ export default function Page() {
           <button className="btn" onClick={copyWorkingList}>
             Copy working list
           </button>
+          <button className="btn" onClick={syncFromExtension}>
+            Sync results
+          </button>
           <button className="btn" onClick={() => setModal('check')}>
             Check links
           </button>
@@ -669,6 +755,11 @@ export default function Page() {
                           </td>
                           <td>
                             <span className={`pill ${l.status}`}>{l.status}</span>
+                          </td>
+                          <td>
+                            {l.verifyResult === 'used' && <span className="pill expired">Used</span>}
+                            {l.verifyResult === 'working' && <span className="pill active">Working</span>}
+                            {!l.verifyResult && <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>}
                           </td>
                           <td>
                             <button
