@@ -18,6 +18,36 @@ function extractUrls(text) {
   return matches ? Array.from(new Set(matches)) : [];
 }
 
+// The Ledger Link Verifier Chrome extension, if installed, lets links be
+// sent to it directly instead of verifying one by one in this tab. Update
+// this if you ever regenerate the extension with a different signing key
+// (its README explains how the ID is derived).
+const EXTENSION_ID = 'ajfinjgibbglcmfgdogecjohgjafbiif';
+
+function sendToExtension(urls, extraPhrases) {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !window.chrome || !window.chrome.runtime || !window.chrome.runtime.sendMessage) {
+      resolve({ ok: false, error: 'not-available' });
+      return;
+    }
+    try {
+      window.chrome.runtime.sendMessage(
+        EXTENSION_ID,
+        { type: 'VERIFY', urls, phrases: extraPhrases },
+        (response) => {
+          if (window.chrome.runtime.lastError || !response) {
+            resolve({ ok: false, error: window.chrome.runtime.lastError?.message || 'no-response' });
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+    }
+  });
+}
+
 export default function Page() {
   const [data, setData] = useState(EMPTY);
   const [loaded, setLoaded] = useState(false);
@@ -250,13 +280,28 @@ export default function Page() {
     return list;
   }
 
-  // ---- manual verify-links flow ----
-  function startVerify() {
+  // ---- verify-links flow (extension first, in-app fallback) ----
+  async function startVerify() {
     const queue = activeLinksForCurrentFilters();
     if (queue.length === 0) {
       showToast('No active links to verify with the current filters');
       return;
     }
+
+    const urls = queue.map((x) => x.url);
+    const relevantBatchIds = new Set(queue.map((x) => x.batchId));
+    const extraPhrases = Array.from(
+      new Set(batches.filter((b) => relevantBatchIds.has(b.id)).flatMap((b) => phrasesForBatch(b)))
+    );
+
+    const extResult = await sendToExtension(urls, extraPhrases);
+    if (extResult.ok) {
+      showToast(`Sent ${urls.length} link(s) to the Ledger Link Verifier extension — open it to watch progress`);
+      return;
+    }
+
+    // Extension not installed or not reachable — fall back to the in-app
+    // manual flow (opens each link in a new tab, you mark it yourself).
     setVerifyQueue(queue);
     setVerifyIndex(0);
     window.open(queue[0].url, '_blank', 'noopener');
