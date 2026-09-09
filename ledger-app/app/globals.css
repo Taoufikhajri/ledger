@@ -99,6 +99,7 @@ input, select, textarea{font-family:inherit;font-size:13px;}
   border-radius:6px;
 }
 .topbar input[type="search"]{flex:1;min-width:160px;}
+.topbar-label{color:var(--muted);font-size:12px;align-self:center;margin-left:4px;}
 
 .stats{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:24px;}
 @media (max-width:900px){.stats{grid-template-columns:repeat(3,1fr);}}

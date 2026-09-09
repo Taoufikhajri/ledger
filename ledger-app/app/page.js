@@ -18,6 +18,11 @@ function extractUrls(text) {
   const matches = text.match(/https?:\/\/[^\s"'<>]+/g);
   return matches ? Array.from(new Set(matches)) : [];
 }
+function extractItems(text) {
+  const urls = extractUrls(text);
+  if (urls.length > 0) return urls;
+  return Array.from(new Set(text.split('\n').map((s) => s.trim()).filter(Boolean)));
+}
 function batchRefPrefix(supplierName, dateStr) {
   const initials = (supplierName || 'GEN').replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'GEN';
   const d = new Date(dateStr || Date.now());
@@ -667,8 +672,12 @@ export default function Page() {
           <button className="btn" onClick={syncFromExtension}>
             Sync results
           </button>
+          <span className="topbar-label">Tools:</span>
           <button className="btn" onClick={() => setModal('check')}>
             Check links
+          </button>
+          <button className="btn" onClick={() => setModal('compare')}>
+            Compare lists
           </button>
           <button className="btn" onClick={exportCSV}>
             Export CSV
@@ -906,6 +915,7 @@ export default function Page() {
       {modal === 'check' && (
         <CheckLinksModal batches={batches} suppliers={suppliers} onClose={() => setModal(null)} />
       )}
+      {modal === 'compare' && <CompareListsModal onClose={() => setModal(null)} onToast={showToast} />}
 
       {verifyQueue.length > 0 && (
         <div className="verify-bar">
@@ -1249,6 +1259,110 @@ function CheckLinksModal({ batches, suppliers, onClose }) {
           </button>
           <button className="btn btn-primary" onClick={runCheck}>
             Check
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompareListsModal({ onClose, onToast }) {
+  const [textA, setTextA] = useState('');
+  const [textB, setTextB] = useState('');
+  const [results, setResults] = useState(null);
+
+  function runCompare() {
+    const a = extractItems(textA);
+    const b = extractItems(textB);
+    const setA = new Set(a);
+    const setB = new Set(b);
+    const onlyA = a.filter((x) => !setB.has(x));
+    const onlyB = b.filter((x) => !setA.has(x));
+    const both = a.filter((x) => setB.has(x));
+    setResults({ onlyA, onlyB, both });
+  }
+
+  function copyGroup(items, label) {
+    if (items.length === 0) {
+      onToast(`Nothing to copy for "${label}"`);
+      return;
+    }
+    navigator.clipboard
+      .writeText(items.join('\n'))
+      .then(() => onToast(`Copied ${items.length} item(s) from "${label}"`))
+      .catch(() => onToast('Could not copy — try again'));
+  }
+
+  function ResultGroup({ title, items }) {
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <div style={{ color: 'var(--muted)', fontSize: 12 }}>
+            {title} ({items.length})
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => copyGroup(items, title)}>
+            Copy
+          </button>
+        </div>
+        <div style={{ maxHeight: 140, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
+          {items.length === 0 ? (
+            <div style={{ padding: 10, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>None</div>
+          ) : (
+            items.map((item, i) => (
+              <div
+                key={i}
+                className="mono"
+                style={{
+                  padding: '6px 10px',
+                  borderBottom: i < items.length - 1 ? '1px solid var(--border)' : 'none',
+                  fontSize: 12,
+                  color: 'var(--muted)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={item}
+              >
+                {item}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 600 }}>
+        <h2>Compare two lists</h2>
+        <div className="field">
+          <label>List A</label>
+          <textarea placeholder="Paste the first list" value={textA} onChange={(e) => setTextA(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>List B</label>
+          <textarea placeholder="Paste the second list" value={textB} onChange={(e) => setTextB(e.target.value)} />
+        </div>
+        <div className="hint" style={{ marginBottom: 14 }}>
+          If a list contains links, only the links are compared. Otherwise each non-empty line is
+          treated as one item.
+        </div>
+
+        {results && (
+          <>
+            <ResultGroup title="Only in List A" items={results.onlyA} />
+            <ResultGroup title="Only in List B" items={results.onlyB} />
+            <ResultGroup title="In both" items={results.both} />
+          </>
+        )}
+
+        <div className="modal-actions">
+          <button className="btn btn-ghost" onClick={onClose}>
+            Close
+          </button>
+          <button className="btn btn-primary" onClick={runCompare}>
+            Compare
           </button>
         </div>
       </div>
