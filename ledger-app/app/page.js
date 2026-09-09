@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const EMPTY = { suppliers: [], types: [], batches: [] };
+const EMPTY = { suppliers: [], types: [], batches: [], settings: {} };
+const DEFAULT_SETTINGS = { sellPrice: 0, targetProfit: 0.15 };
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -99,6 +100,7 @@ export default function Page() {
   const suppliers = data.suppliers || [];
   const types = data.types || [];
   const batches = data.batches || [];
+  const settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
 
   // ---- initial load ----
   useEffect(() => {
@@ -108,7 +110,7 @@ export default function Page() {
         if (d && d.error) {
           setLoadError(d.error);
         } else if (d && Array.isArray(d.suppliers) && Array.isArray(d.batches)) {
-          setData({ suppliers: d.suppliers, types: d.types || [], batches: d.batches });
+          setData({ suppliers: d.suppliers, types: d.types || [], batches: d.batches, settings: d.settings || {} });
         } else {
           setData(EMPTY);
         }
@@ -169,6 +171,17 @@ export default function Page() {
     .filter((x) => x.link.status === 'refunded')
     .reduce((sum, x) => sum + (x.batch.pricePerLink || 0), 0);
 
+  // ---- profitability (combined across every batch) ----
+  // Waste rate: fraction of purchased links that turned out unusable
+  // (expired or refunded) rather than sellable.
+  const wastedLinks = allLinks.filter((x) => x.link.status === 'expired' || x.link.status === 'refunded').length;
+  const wasteRate = totalLinks > 0 ? wastedLinks / totalLinks : 0;
+  const totalCost = allLinks.reduce((sum, x) => sum + (x.batch.pricePerLink || 0), 0);
+  const avgBuyPrice = totalLinks > 0 ? totalCost / totalLinks : 0;
+  const avgRevenuePerLink = (1 - wasteRate) * settings.sellPrice;
+  const avgProfitPerLink = avgRevenuePerLink - avgBuyPrice;
+  const maxBuyPrice = avgRevenuePerLink - settings.targetProfit;
+
   const supplierCounts = {};
   const typeCounts = {};
   batches.forEach((b) => {
@@ -189,6 +202,10 @@ export default function Page() {
     .filter((b) => b.links.length > 0 || (!q && statusFilter === 'all'));
 
   // ---- mutations ----
+  function updateSettings(patch) {
+    setData((d) => ({ ...d, settings: { ...DEFAULT_SETTINGS, ...(d.settings || {}), ...patch } }));
+  }
+
   function addSupplier(name) {
     setData((d) => ({ ...d, suppliers: [...(d.suppliers || []), { id: uid(), name: name.trim() }] }));
   }
@@ -682,6 +699,55 @@ export default function Page() {
           <div className="stat">
             <div className="n mono">{money(refundedValue)}</div>
             <div className="l">Refunded value</div>
+          </div>
+        </div>
+
+        <div className="profit-panel">
+          <div className="profit-inputs">
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label>Your sell price per link</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={settings.sellPrice}
+                onChange={(e) => updateSettings({ sellPrice: parseFloat(e.target.value) || 0 })}
+              />
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label>Target profit per link</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={settings.targetProfit}
+                onChange={(e) => updateSettings({ targetProfit: parseFloat(e.target.value) || 0 })}
+              />
+            </div>
+          </div>
+          <div className="stats" style={{ margin: 0 }}>
+            <div className="stat">
+              <div className="n mono">{(wasteRate * 100).toFixed(1)}%</div>
+              <div className="l">Waste rate</div>
+            </div>
+            <div className="stat">
+              <div className="n mono">{money(avgBuyPrice)}</div>
+              <div className="l">Current avg buy price</div>
+            </div>
+            <div className={`stat ${avgProfitPerLink >= settings.targetProfit ? 'active' : 'risk'}`}>
+              <div className="n mono">{money(avgProfitPerLink)}</div>
+              <div className="l">Current avg profit/link</div>
+            </div>
+            <div className="stat">
+              <div className="n mono">{money(maxBuyPrice)}</div>
+              <div className="l">Max buy price to hit target</div>
+            </div>
+          </div>
+          <div className="hint" style={{ marginTop: 10 }}>
+            Based on {totalLinks} link(s) across all batches: {wastedLinks} turned out expired or
+            refunded (waste rate above). Max buy price = (1 − waste rate) × sell price − target
+            profit — the most you can pay per link from a supplier and still average your target
+            profit, given links get wasted at this rate.
           </div>
         </div>
 

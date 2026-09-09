@@ -116,6 +116,16 @@ input, select, textarea{font-family:inherit;font-size:13px;}
 .stat.refunded .n{color:var(--teal);}
 .stat.risk .n{color:var(--red);}
 
+.profit-panel{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:16px;
+  margin-bottom:24px;
+}
+.profit-inputs{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;}
+.profit-inputs .field{flex:1;min-width:160px;}
+
 .batch{
   background:var(--surface);
   border:1px solid var(--border);
